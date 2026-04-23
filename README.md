@@ -42,6 +42,20 @@ To learn more about developing your project with Expo, look at the following res
 - [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
 - [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
 
+## Receipt AI Setup
+
+To use the receipt capture + Gemini auto-fill feature in the expense form:
+
+1. Create a `.env` file in the project root.
+2. Add your Gemini key:
+
+   ```bash
+   EXPO_PUBLIC_GEMINI_API_KEY=your_gemini_api_key_here
+   ```
+
+3. Restart Expo after updating env variables.
+4. If the app was already installed before camera plugin config changes, rebuild the app once.
+
 ## Join the community
 
 Join our community of developers creating universal apps.

@@ -1,35 +1,37 @@
 import { DatePickerField } from "@/components/ui/date-picker-field";
 import {
-    calculateProjectTotalExpense,
-    createExpense,
-    deleteExpense,
-    fetchExpensesByProjectId,
-    getExpenseSummaryByType,
-    updateExpense,
+  calculateProjectTotalExpense,
+  createExpense,
+  deleteExpense,
+  fetchExpensesByProjectId,
+  getExpenseSummaryByType,
+  updateExpense,
 } from "@/services/api/expenseService";
+import { analyzeReceiptImageWithGemini } from "@/services/api/receiptAnalysisService";
 import {
-    CreateExpensePayload,
-    Expense,
-    ExpenseType,
-    PaymentMethod,
-    PaymentStatus,
+  CreateExpensePayload,
+  Expense,
+  ExpenseType,
+  PaymentMethod,
+  PaymentStatus,
 } from "@/types";
+import * as ImagePicker from "expo-image-picker";
 import React, { useCallback, useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Modal,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 interface ExpenseManagementProps {
   projectId: string;
   projectBudget: number;
@@ -39,6 +41,7 @@ export const ExpenseManagementComponent: React.FC<ExpenseManagementProps> = ({
   projectId,
   projectBudget,
 }) => {
+  const insets = useSafeAreaInsets();
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -48,6 +51,7 @@ export const ExpenseManagementComponent: React.FC<ExpenseManagementProps> = ({
     useState<Expense | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [analyzingReceipt, setAnalyzingReceipt] = useState(false);
   const [totalExpense, setTotalExpense] = useState(0);
   const [expenseSummary, setExpenseSummary] = useState<Record<string, number>>(
     {},
@@ -161,6 +165,82 @@ export const ExpenseManagementComponent: React.FC<ExpenseManagementProps> = ({
     setShowDeleteModal(true);
   };
 
+  const mergeAnalyzedFormValues = (
+    currentForm: CreateExpensePayload,
+    extracted: Partial<CreateExpensePayload>,
+    receiptUri?: string,
+  ): CreateExpensePayload => {
+    return {
+      ...currentForm,
+      date: extracted.date ?? currentForm.date,
+      amount: extracted.amount ?? currentForm.amount,
+      currency: extracted.currency ?? currentForm.currency,
+      type: extracted.type ?? currentForm.type,
+      paymentMethod: extracted.paymentMethod ?? currentForm.paymentMethod,
+      claimant: extracted.claimant ?? currentForm.claimant,
+      paymentStatus: extracted.paymentStatus ?? currentForm.paymentStatus,
+      description: extracted.description ?? currentForm.description,
+      location: extracted.location ?? currentForm.location,
+      expenseCode: extracted.expenseCode ?? currentForm.expenseCode,
+      receiptPath: receiptUri ?? currentForm.receiptPath,
+    };
+  };
+
+  const handleScanReceipt = async () => {
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          "Camera permission required",
+          "Please allow camera access to capture receipt images.",
+        );
+        return;
+      }
+
+      const captureResult = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        quality: 0.7,
+        base64: true,
+      });
+
+      if (captureResult.canceled || captureResult.assets.length === 0) {
+        return;
+      }
+
+      const asset = captureResult.assets[0];
+      if (!asset.base64 || !asset.mimeType) {
+        Alert.alert(
+          "Cannot read receipt image",
+          "Please try taking the photo again.",
+        );
+        return;
+      }
+
+      setAnalyzingReceipt(true);
+      const analysis = await analyzeReceiptImageWithGemini({
+        imageBase64: asset.base64,
+        mimeType: asset.mimeType,
+      });
+
+      setForm((prev) =>
+        mergeAnalyzedFormValues(prev, analysis.extracted, asset.uri),
+      );
+
+      Alert.alert(
+        "Receipt analyzed",
+        `${analysis.confidenceNote}\n\nPlease review and correct the fields before saving.`,
+      );
+    } catch (error) {
+      console.error("Error scanning receipt:", error);
+      Alert.alert(
+        "Receipt analysis failed",
+        "Could not analyze this receipt. Please fill the form manually or try again.",
+      );
+    } finally {
+      setAnalyzingReceipt(false);
+    }
+  };
+
   const confirmDeleteExpense = async () => {
     if (!pendingDeleteExpense) {
       return;
@@ -244,16 +324,16 @@ export const ExpenseManagementComponent: React.FC<ExpenseManagementProps> = ({
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <View style={styles.budgetSection}>
         <View style={styles.budgetCard}>
           <Text style={styles.budgetLabel}>Total Budget</Text>
-          <Text style={styles.budgetAmount}>${projectBudget.toFixed(2)}</Text>
+          <Text style={styles.budgetAmount}>${projectBudget}</Text>
         </View>
         <View style={styles.budgetCard}>
           <Text style={styles.budgetLabel}>Spent</Text>
           <Text style={[styles.budgetAmount, { color: "#E74C3C" }]}>
-            ${totalExpense.toFixed(2)}
+            ${totalExpense}
           </Text>
         </View>
         <View style={styles.budgetCard}>
@@ -264,7 +344,7 @@ export const ExpenseManagementComponent: React.FC<ExpenseManagementProps> = ({
               { color: remainingBudget < 0 ? "#E74C3C" : "#27AE60" },
             ]}
           >
-            ${remainingBudget.toFixed(2)}
+            ${remainingBudget}
           </Text>
         </View>
       </View>
@@ -334,9 +414,25 @@ export const ExpenseManagementComponent: React.FC<ExpenseManagementProps> = ({
         />
       )}
 
-      <Modal visible={showModal} animationType="slide" transparent>
-        <SafeAreaView style={styles.modal}>
-          <ScrollView style={styles.modalContent}>
+      <Modal
+        visible={showModal}
+        animationType="slide"
+        presentationStyle="fullScreen"
+      >
+        <View
+          style={[
+            styles.modal,
+            {
+              paddingTop: insets.top,
+              paddingBottom: insets.bottom,
+            },
+          ]}
+        >
+          <ScrollView
+            style={styles.modalContent}
+            contentContainerStyle={styles.modalContentContainer}
+            keyboardShouldPersistTaps="handled"
+          >
             <View style={styles.modalHeader}>
               <TouchableOpacity
                 onPress={() => {
@@ -349,12 +445,44 @@ export const ExpenseManagementComponent: React.FC<ExpenseManagementProps> = ({
               <Text style={styles.modalTitle}>
                 {editingExpense ? "Edit Expense" : "Add Expense"}
               </Text>
-              <TouchableOpacity onPress={handleAddEdit}>
+              <TouchableOpacity
+                onPress={handleAddEdit}
+                disabled={analyzingReceipt}
+              >
                 <Text style={styles.saveBtn}>Save</Text>
               </TouchableOpacity>
             </View>
 
             <View style={styles.formSection}>
+              <TouchableOpacity
+                style={[
+                  styles.scanReceiptBtn,
+                  analyzingReceipt && styles.scanReceiptBtnDisabled,
+                ]}
+                onPress={() => {
+                  void handleScanReceipt();
+                }}
+                disabled={analyzingReceipt}
+              >
+                {analyzingReceipt ? (
+                  <View style={styles.scanReceiptLoadingRow}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.scanReceiptBtnText}>
+                      Analyzing receipt...
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={styles.scanReceiptBtnText}>
+                    Capture Receipt with Camera
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+              <Text style={styles.scanReceiptHint}>
+                AI will auto-fill the form from the receipt. Please review every
+                field before saving.
+              </Text>
+
               <Text style={styles.label}>Date *</Text>
               <DatePickerField
                 value={form.date}
@@ -480,7 +608,7 @@ export const ExpenseManagementComponent: React.FC<ExpenseManagementProps> = ({
               />
             </View>
           </ScrollView>
-        </SafeAreaView>
+        </View>
       </Modal>
 
       <Modal visible={showDeleteModal} animationType="fade" transparent>
@@ -524,7 +652,7 @@ export const ExpenseManagementComponent: React.FC<ExpenseManagementProps> = ({
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -741,12 +869,15 @@ const styles = StyleSheet.create({
   modalContent: {
     flex: 1,
   },
+  modalContentContainer: {
+    paddingBottom: 16,
+  },
   modalHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#E0E0E0",
   },
@@ -767,6 +898,33 @@ const styles = StyleSheet.create({
   },
   formSection: {
     padding: 16,
+  },
+  scanReceiptBtn: {
+    backgroundColor: "#2563EB",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  scanReceiptBtnDisabled: {
+    backgroundColor: "#8AA7F4",
+  },
+  scanReceiptLoadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  scanReceiptBtnText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  scanReceiptHint: {
+    color: "#555",
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 8,
   },
   label: {
     fontSize: 14,
